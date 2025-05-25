@@ -1,5 +1,6 @@
 import reflex as rx
 from typing import List, Dict, TypedDict, Optional, Any
+from app.states.secure_state import SecureState
 
 COLOR_MAP = {
     "red": {
@@ -432,7 +433,7 @@ ICONS_LIST = [
 ]
 
 
-class WellnessState(rx.State):
+class WellnessState(SecureState):
     current_user: str = "Wellness Enthusiast"
     daily_stats: list[DailyStat] = [
         DailyStat(
@@ -491,6 +492,9 @@ class WellnessState(rx.State):
     current_category_detail: CategoryDetail | None = None
     icons_options: list[str] = ICONS_LIST
     color_key_options: list[str] = list(COLOR_MAP.keys())
+    _private_wellness_data: str = (
+        "This is sensitive wellness data"
+    )
 
     def _get_color_details(
         self, color_key: str
@@ -720,6 +724,12 @@ class WellnessState(rx.State):
     @rx.event
     def logout(self):
         self.current_user = "Wellness Enthusiast"
+        print(
+            f"Secure token during logout: {self._secret_token}"
+        )
+        print(
+            f"Private wellness data: {self._private_wellness_data}"
+        )
         yield rx.toast.info("Logged out (simulated).")
 
     @rx.var
@@ -952,3 +962,16 @@ class WellnessState(rx.State):
                 self.current_category_detail = (
                     self.categories[first_category_id]
                 )
+
+    @rx.event
+    def reveal_secrets_server_side(self):
+        print(
+            f"Accessing secret token: {self._secret_token}"
+        )
+        print(
+            f"Accessing private wellness data: {self._private_wellness_data}"
+        )
+        print(f"Current secure counter: {self.counter}")
+        yield rx.toast.info(
+            "Secrets printed to server console."
+        )
