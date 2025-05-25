@@ -8,7 +8,8 @@ from app.state import (
 
 def sub_category_progress_item(
     sub_category: SubCategoryGoal,
-    parent_progress_color_class: str,
+    bar_fill_color_class: str,
+    text_highlight_color_class: str,
 ) -> rx.Component:
     return rx.el.div(
         rx.el.div(
@@ -18,7 +19,7 @@ def sub_category_progress_item(
             ),
             rx.el.p(
                 f"{sub_category.time_spent:.1f} / {sub_category.allocated_time:.1f} hrs",
-                class_name=f"text-xs {parent_progress_color_class.replace('bg-', 'text-').replace('-500', '-600')} font-semibold",
+                class_name=f"text-xs {text_highlight_color_class} font-semibold",
             ),
             class_name="flex justify-between items-baseline",
         ),
@@ -27,7 +28,7 @@ def sub_category_progress_item(
                 style={
                     "width": f"{sub_category.progress}%"
                 },
-                class_name=f"h-2 rounded {parent_progress_color_class}",
+                class_name=f"h-2 rounded {bar_fill_color_class}",
             ),
             class_name="w-full bg-gray-200 rounded h-2 mt-1",
         ),
@@ -94,6 +95,7 @@ def category_detail_card_component(
                     lambda sub_cat: sub_category_progress_item(
                         sub_cat,
                         category_detail.color_progress_bg_class,
+                        category_detail.color_text_class,
                     ),
                 ),
                 rx.el.p(
