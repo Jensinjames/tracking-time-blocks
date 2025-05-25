@@ -1,6 +1,7 @@
 import reflex as rx
 from app.pages.dashboard_page import dashboard_page
 from app.state import WellnessState
+from app.config import settings
 
 
 def index() -> rx.Component:
@@ -31,6 +32,6 @@ app = rx.App(
 )
 app.add_page(
     index,
-    title="Wellness Dashboard",
+    title=settings.APP_NAME,
     on_load=WellnessState.on_load,
 )
