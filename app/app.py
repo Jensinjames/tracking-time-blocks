@@ -33,5 +33,5 @@ app = rx.App(
 app.add_page(
     index,
     title=settings.APP_NAME,
-    on_load=WellnessState.on_load,
+    on_load=WellnessState.initial_app_load,
 )

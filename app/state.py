@@ -2,6 +2,8 @@ import reflex as rx
 from typing import List, Dict, TypedDict, Optional, Any
 from app.states.secure_state import SecureState
 from app.config import settings
+from datetime import date, datetime
+from sqlalchemy import text
 
 
 class DailyStat(rx.Base):
@@ -70,6 +72,12 @@ SelectOption = TypedDict(
 )
 
 
+class EntryData(TypedDict):
+    id: str
+    entry_date: str
+    created_at: str
+
+
 class WellnessState(SecureState):
     current_user: str = settings.DEFAULT_USER
     daily_stats: list[DailyStat] = [
@@ -136,6 +144,9 @@ class WellnessState(SecureState):
     _private_wellness_data: str = (
         "This is sensitive wellness data"
     )
+    entries: list[EntryData] = []
+    selected_date: str = date.today().isoformat()
+    loading_entries: bool = False
 
     def _get_color_details(
         self, color_key: str
@@ -514,7 +525,8 @@ class WellnessState(SecureState):
             1,
         )
 
-    def on_load(self):
+    @rx.event
+    def initial_app_load(self):
         if not self.categories:
             initial_categories_data = [
                 {
@@ -604,6 +616,64 @@ class WellnessState(SecureState):
                 self.current_category_detail = (
                     self.categories[first_category_id]
                 )
+        yield WellnessState.load_entries
+
+    @rx.event(background=True)
+    async def load_entries(self):
+        async with self:
+            self.loading_entries = True
+        try:
+            current_selected_date = (
+                self.selected_date
+                if self.selected_date
+                else date.today().isoformat()
+            )
+            async with rx.asession() as session:
+                result = await session.execute(
+                    text(
+                        "SELECT id, date, created_at FROM entries WHERE DATE(created_at) = :selected_date_param ORDER BY created_at DESC"
+                    ),
+                    {
+                        "selected_date_param": current_selected_date
+                    },
+                )
+                rows = result.fetchall()
+            async with self:
+                self.entries = [
+                    EntryData(
+                        id=str(row.id),
+                        entry_date=(
+                            row.date.isoformat()
+                            if row.date
+                            else ""
+                        ),
+                        created_at=(
+                            row.created_at.isoformat()
+                            if row.created_at
+                            else ""
+                        ),
+                    )
+                    for row in rows
+                ]
+                self.loading_entries = False
+        except Exception as e:
+            async with self:
+                self.loading_entries = False
+            print(f"Error loading entries: {e}")
+            yield rx.toast.error(
+                f"Failed to load entries. Check server logs."
+            )
+
+    @rx.event
+    def set_selected_date_and_load(self, new_date: str):
+        try:
+            datetime.strptime(new_date, "%Y-%m-%d")
+            self.selected_date = new_date
+            return WellnessState.load_entries
+        except ValueError:
+            return rx.toast.error(
+                "Invalid date format. Please use YYYY-MM-DD."
+            )
 
     @rx.event
     def reveal_secrets_server_side(self):
