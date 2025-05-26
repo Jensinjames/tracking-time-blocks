@@ -21,9 +21,18 @@ TOOLTIP_PROPS = {
 def create_gradient_definition(
     segment_data: PieChartSegment,
 ) -> rx.Component:
-    is_spent = segment_data["name"].contains("(Spent)")
-    opacity_start = rx.cond(is_spent, 0.9, 0.5)
-    opacity_end = rx.cond(is_spent, 0.7, 0.2)
+    is_spent_or_only_allocated = segment_data[
+        "name"
+    ].contains("(Spent)") | ~(
+        segment_data["name"].contains("(Remaining)")
+        | segment_data["name"].contains("(Allocated)")
+    )
+    opacity_start = rx.cond(
+        is_spent_or_only_allocated, 0.9, 0.5
+    )
+    opacity_end = rx.cond(
+        is_spent_or_only_allocated, 0.7, 0.2
+    )
     return rx.el.svg.linear_gradient(
         rx.el.svg.stop(
             offset="5%",
@@ -87,7 +96,7 @@ def composite_donut_chart_component() -> rx.Component:
                 class_name="text-2xl font-bold text-gray-800",
             ),
             rx.el.p(
-                "Overall Progress",
+                WellnessState.donut_center_label,
                 class_name="text-xs text-gray-500",
             ),
             class_name="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none",

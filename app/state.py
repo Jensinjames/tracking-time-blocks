@@ -364,7 +364,7 @@ class WellnessState(SecureState):
         self.selected_subcategory_for_entry = ""
 
     @rx.event
-    def select_category(self, category_id: str):
+    def select_category(self, category_id: str | None):
         if category_id and category_id in self.categories:
             self.current_category_detail = self.categories[
                 category_id
@@ -446,84 +446,147 @@ class WellnessState(SecureState):
     @rx.var
     def composite_donut_data(self) -> list[PieChartSegment]:
         data: list[PieChartSegment] = []
-        if not self.categories:
-            return [
-                PieChartSegment(
-                    name="No Data",
-                    value=100,
-                    fill="#E5E7EB",
-                    base_color="#E5E7EB",
-                    gradient_id="grad_no_data",
-                )
-            ]
-        for cat_id, category in self.categories.items():
-            base_hex = category.base_color_hex
-            allocated_remaining_value = (
-                category.total_allocated_time
-                - category.total_time_spent
-            )
-            if allocated_remaining_value > 0.001:
-                grad_id_allocated = (
-                    f"gradient_{category.id}_allocated"
-                )
-                data.append(
+        if self.current_category_detail:
+            category = self.current_category_detail
+            if not category.subcategories:
+                return [
                     PieChartSegment(
-                        name=f"{category.name} (Allocated)",
-                        value=allocated_remaining_value,
-                        fill=f"url(#{grad_id_allocated})",
-                        base_color=base_hex,
-                        gradient_id=grad_id_allocated,
+                        name=f"No Subcategories in {category.name}",
+                        value=100,
+                        fill="#E5E7EB",
+                        base_color="#E5E7EB",
+                        gradient_id=f"grad_no_sub_{category.id}",
                     )
+                ]
+            for sub_category in category.subcategories:
+                base_hex = category.base_color_hex
+                time_remaining = (
+                    sub_category.allocated_time
+                    - sub_category.time_spent
                 )
-            if category.total_time_spent > 0.001:
-                grad_id_spent = (
-                    f"gradient_{category.id}_spent"
-                )
-                data.append(
+                if sub_category.time_spent > 0.001:
+                    grad_id_spent = f"gradient_sub_{sub_category.id}_spent"
+                    data.append(
+                        PieChartSegment(
+                            name=f"{sub_category.name} (Spent)",
+                            value=sub_category.time_spent,
+                            fill=f"url(#{grad_id_spent})",
+                            base_color=base_hex,
+                            gradient_id=grad_id_spent,
+                        )
+                    )
+                if time_remaining > 0.001:
+                    grad_id_remaining = f"gradient_sub_{sub_category.id}_remaining"
+                    data.append(
+                        PieChartSegment(
+                            name=f"{sub_category.name} (Remaining)",
+                            value=time_remaining,
+                            fill=f"url(#{grad_id_remaining})",
+                            base_color=base_hex,
+                            gradient_id=grad_id_remaining,
+                        )
+                    )
+            if not data:
+                return [
                     PieChartSegment(
-                        name=f"{category.name} (Spent)",
-                        value=category.total_time_spent,
-                        fill=f"url(#{grad_id_spent})",
-                        base_color=base_hex,
-                        gradient_id=grad_id_spent,
+                        name=f"No Activity in {category.name}",
+                        value=100,
+                        fill="#D1D5DB",
+                        base_color="#D1D5DB",
+                        gradient_id=f"grad_no_activity_sub_{category.id}",
                     )
+                ]
+        else:
+            if not self.categories:
+                return [
+                    PieChartSegment(
+                        name="No Data",
+                        value=100,
+                        fill="#E5E7EB",
+                        base_color="#E5E7EB",
+                        gradient_id="grad_no_data",
+                    )
+                ]
+            for (
+                cat_id,
+                category_item,
+            ) in self.categories.items():
+                base_hex = category_item.base_color_hex
+                allocated_remaining_value = (
+                    category_item.total_allocated_time
+                    - category_item.total_time_spent
                 )
-        if not data:
-            return [
-                PieChartSegment(
-                    name="No Activity Data",
-                    value=100,
-                    fill="#D1D5DB",
-                    base_color="#D1D5DB",
-                    gradient_id="grad_no_activity",
-                )
-            ]
+                if allocated_remaining_value > 0.001:
+                    grad_id_allocated = f"gradient_{category_item.id}_allocated"
+                    data.append(
+                        PieChartSegment(
+                            name=f"{category_item.name} (Allocated)",
+                            value=allocated_remaining_value,
+                            fill=f"url(#{grad_id_allocated})",
+                            base_color=base_hex,
+                            gradient_id=grad_id_allocated,
+                        )
+                    )
+                if category_item.total_time_spent > 0.001:
+                    grad_id_spent = (
+                        f"gradient_{category_item.id}_spent"
+                    )
+                    data.append(
+                        PieChartSegment(
+                            name=f"{category_item.name} (Spent)",
+                            value=category_item.total_time_spent,
+                            fill=f"url(#{grad_id_spent})",
+                            base_color=base_hex,
+                            gradient_id=grad_id_spent,
+                        )
+                    )
+            if not data:
+                return [
+                    PieChartSegment(
+                        name="No Activity Data",
+                        value=100,
+                        fill="#D1D5DB",
+                        base_color="#D1D5DB",
+                        gradient_id="grad_no_activity",
+                    )
+                ]
         return data
 
     @rx.var
     def overall_progress_value_for_donut_center(
         self,
     ) -> float:
-        total_allocated_all_categories = sum(
-            (
-                c.total_allocated_time
-                for c in self.categories.values()
+        if self.current_category_detail:
+            return (
+                self.current_category_detail.overall_progress
             )
-        )
-        total_spent_all_categories = sum(
-            (
-                c.total_time_spent
-                for c in self.categories.values()
+        else:
+            total_allocated_all_categories = sum(
+                (
+                    c.total_allocated_time
+                    for c in self.categories.values()
+                )
             )
-        )
-        if total_allocated_all_categories == 0:
-            return 0.0
-        return round(
-            total_spent_all_categories
-            / total_allocated_all_categories
-            * 100,
-            1,
-        )
+            total_spent_all_categories = sum(
+                (
+                    c.total_time_spent
+                    for c in self.categories.values()
+                )
+            )
+            if total_allocated_all_categories == 0:
+                return 0.0
+            return round(
+                total_spent_all_categories
+                / total_allocated_all_categories
+                * 100,
+                1,
+            )
+
+    @rx.var
+    def donut_center_label(self) -> str:
+        if self.current_category_detail:
+            return f"{self.current_category_detail.name} Progress"
+        return "Overall Progress"
 
     @rx.event
     def initial_app_load(self):
@@ -608,13 +671,6 @@ class WellnessState(SecureState):
                 self.categories[category.id] = category
                 self._recalculate_category_progress(
                     category.id
-                )
-            if self.categories:
-                first_category_id = list(
-                    self.categories.keys()
-                )[0]
-                self.current_category_detail = (
-                    self.categories[first_category_id]
                 )
         yield WellnessState.load_entries
 
