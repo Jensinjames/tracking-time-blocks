@@ -79,7 +79,6 @@ class EntryData(TypedDict):
 
 
 class WellnessState(SecureState):
-    current_user: str = settings.DEFAULT_USER
     daily_stats: list[DailyStat] = [
         DailyStat(
             icon="time_line",
@@ -147,6 +146,15 @@ class WellnessState(SecureState):
     entries: list[EntryData] = []
     selected_date: str = date.today().isoformat()
     loading_entries: bool = False
+
+    @rx.var
+    async def current_user(self) -> str:
+        from app.states.auth_state import AuthState
+
+        auth_s = await self.get_state(AuthState)
+        if auth_s.logged_in_user_email:
+            return auth_s.logged_in_user_email
+        return "Guest"
 
     def _get_color_details(
         self, color_key: str
@@ -375,15 +383,11 @@ class WellnessState(SecureState):
                 yield rx.toast.error("Category not found.")
 
     @rx.event
-    def logout(self):
-        self.current_user = settings.DEFAULT_USER
-        print(
-            f"Secure token during logout: {self._secret_token}"
-        )
-        print(
-            f"Private wellness data: {self._private_wellness_data}"
-        )
-        yield rx.toast.info("Logged out (simulated).")
+    async def logout(self):
+        from app.states.auth_state import AuthState
+
+        auth_s = await self.get_state(AuthState)
+        yield auth_s.sign_out()
 
     @rx.var
     def category_options_for_select(
@@ -512,21 +516,6 @@ class WellnessState(SecureState):
                 category_item,
             ) in self.categories.items():
                 base_hex = category_item.base_color_hex
-                allocated_remaining_value = (
-                    category_item.total_allocated_time
-                    - category_item.total_time_spent
-                )
-                if allocated_remaining_value > 0.001:
-                    grad_id_allocated = f"gradient_{category_item.id}_allocated"
-                    data.append(
-                        PieChartSegment(
-                            name=f"{category_item.name} (Allocated)",
-                            value=allocated_remaining_value,
-                            fill=f"url(#{grad_id_allocated})",
-                            base_color=base_hex,
-                            gradient_id=grad_id_allocated,
-                        )
-                    )
                 if category_item.total_time_spent > 0.001:
                     grad_id_spent = (
                         f"gradient_{category_item.id}_spent"
@@ -538,6 +527,21 @@ class WellnessState(SecureState):
                             fill=f"url(#{grad_id_spent})",
                             base_color=base_hex,
                             gradient_id=grad_id_spent,
+                        )
+                    )
+                allocated_remaining_value = (
+                    category_item.total_allocated_time
+                    - category_item.total_time_spent
+                )
+                if allocated_remaining_value > 0.001:
+                    grad_id_allocated = f"gradient_{category_item.id}_allocated_remaining"
+                    data.append(
+                        PieChartSegment(
+                            name=f"{category_item.name} (Remaining Allocation)",
+                            value=allocated_remaining_value,
+                            fill=f"url(#{grad_id_allocated})",
+                            base_color=base_hex,
+                            gradient_id=grad_id_allocated,
                         )
                     )
             if not data:
