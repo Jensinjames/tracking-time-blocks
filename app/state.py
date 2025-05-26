@@ -4,6 +4,8 @@ from app.states.secure_state import SecureState
 from app.config import settings
 from datetime import date, datetime
 from sqlalchemy import text
+import time
+import asyncio
 
 
 class DailyStat(rx.Base):
@@ -146,6 +148,11 @@ class WellnessState(SecureState):
     entries: list[EntryData] = []
     selected_date: str = date.today().isoformat()
     loading_entries: bool = False
+    is_tracking_active: bool = False
+    tracking_start_time: float | None = None
+    tracking_elapsed_time_str: str = "00:00:00"
+    tracking_category_id: str = ""
+    tracking_subcategory_id: str = ""
 
     @rx.var
     async def current_user(self) -> str:
@@ -244,6 +251,7 @@ class WellnessState(SecureState):
             if self.color_key_options
             else "blue"
         )
+        self.categories = self.categories.copy()
         yield rx.toast.success(
             f"Category '{name}' created."
         )
@@ -301,6 +309,11 @@ class WellnessState(SecureState):
         self.selected_category_for_subcategory = ""
         self.new_subcategory_name = ""
         self.new_subcategory_allocated_time = "1.0"
+        self.categories = self.categories.copy()
+        if self.selected_category_for_entry == category_id:
+            self.selected_category_for_entry = category_id
+        if self.tracking_category_id == category_id:
+            self.tracking_category_id = category_id
         yield rx.toast.success(
             f"Subcategory '{name}' added to '{category.name}'."
         )
@@ -747,3 +760,163 @@ class WellnessState(SecureState):
         yield rx.toast.info(
             "Secrets printed to server console."
         )
+
+    def _format_time_hms(self, total_seconds: float) -> str:
+        if total_seconds < 0:
+            total_seconds = 0
+        total_seconds = int(total_seconds)
+        hours = total_seconds // 3600
+        minutes = total_seconds % 3600 // 60
+        seconds = total_seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    @rx.event(background=True)
+    async def update_elapsed_time_task(self):
+        while True:
+            async with self:
+                if (
+                    not self.is_tracking_active
+                    or self.tracking_start_time is None
+                ):
+                    break
+                elapsed_seconds = (
+                    time.time() - self.tracking_start_time
+                )
+                self.tracking_elapsed_time_str = (
+                    self._format_time_hms(elapsed_seconds)
+                )
+            await asyncio.sleep(1)
+            async with self:
+                if not self.is_tracking_active:
+                    break
+
+    def _reset_tracker_inputs(self):
+        self.tracking_category_id = ""
+        self.tracking_subcategory_id = ""
+        self.tracking_elapsed_time_str = "00:00:00"
+
+    @rx.event
+    def start_activity_tracking(self):
+        if not self.tracking_category_id:
+            return rx.toast.error(
+                "Please select a category to track."
+            )
+        if not self.tracking_subcategory_id:
+            return rx.toast.error(
+                "Please select a subcategory to track."
+            )
+        category = self.categories.get(
+            self.tracking_category_id
+        )
+        if not category:
+            return rx.toast.error(
+                "Selected category not found."
+            )
+        subcategory = next(
+            (
+                sub
+                for sub in category.subcategories
+                if sub.id == self.tracking_subcategory_id
+            ),
+            None,
+        )
+        if not subcategory:
+            return rx.toast.error(
+                "Selected subcategory not found."
+            )
+        self.is_tracking_active = True
+        self.tracking_start_time = time.time()
+        self.tracking_elapsed_time_str = "00:00:00"
+        yield WellnessState.update_elapsed_time_task
+        yield rx.toast.info(
+            f"Tracking started for {category.name} ({subcategory.name})."
+        )
+
+    @rx.event
+    def stop_activity_tracking(self):
+        if (
+            not self.is_tracking_active
+            or self.tracking_start_time is None
+        ):
+            return
+        elapsed_seconds = (
+            time.time() - self.tracking_start_time
+        )
+        duration_hours = elapsed_seconds / 3600
+        category_id_to_log = self.tracking_category_id
+        subcategory_id_to_log = self.tracking_subcategory_id
+        self.is_tracking_active = False
+        self.tracking_start_time = None
+        if (
+            not category_id_to_log
+            or not subcategory_id_to_log
+        ):
+            yield rx.toast.error(
+                "Error: Tracked category/subcategory ID missing when stopping."
+            )
+            self._reset_tracker_inputs()
+            return
+        category = self.categories.get(category_id_to_log)
+        if not category:
+            yield rx.toast.error(
+                f"Error: Category '{category_id_to_log}' not found."
+            )
+            self._reset_tracker_inputs()
+            return
+        subcategory_target = None
+        for sub in category.subcategories:
+            if sub.id == subcategory_id_to_log:
+                subcategory_target = sub
+                sub.time_spent += duration_hours
+                sub.progress = (
+                    round(
+                        sub.time_spent
+                        / sub.allocated_time
+                        * 100,
+                        1,
+                    )
+                    if sub.allocated_time > 0
+                    else (
+                        100.0 if sub.time_spent > 0 else 0.0
+                    )
+                )
+                break
+        if not subcategory_target:
+            yield rx.toast.error(
+                f"Error: Subcategory '{subcategory_id_to_log}' not found in '{category.name}'."
+            )
+            self._reset_tracker_inputs()
+            return
+        self._recalculate_category_progress(
+            category_id_to_log
+        )
+        yield rx.toast.success(
+            f"Logged {duration_hours:.2f} hrs to '{subcategory_target.name}'."
+        )
+        self._reset_tracker_inputs()
+
+    @rx.event
+    def set_tracking_category(self, category_id: str):
+        self.tracking_category_id = category_id
+        self.tracking_subcategory_id = ""
+
+    @rx.event
+    def set_tracking_subcategory(self, subcategory_id: str):
+        self.tracking_subcategory_id = subcategory_id
+
+    @rx.var
+    def tracking_subcategory_options_for_select(
+        self,
+    ) -> list[SelectOption]:
+        if (
+            self.tracking_category_id
+            and self.tracking_category_id in self.categories
+        ):
+            category = self.categories[
+                self.tracking_category_id
+            ]
+            return [
+                {"label": sub.name, "value": sub.id}
+                for sub in category.subcategories
+            ]
+        return []
