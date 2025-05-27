@@ -348,7 +348,9 @@ class WellnessState(SecureState):
             )
         category = self.categories[category_id]
         subcategory_found = False
-        for sub in category.subcategories:
+        for sub_idx, sub in enumerate(
+            category.subcategories
+        ):
             if sub.id == subcategory_id:
                 sub.time_spent += hours_spent
                 sub.progress = (
@@ -363,6 +365,7 @@ class WellnessState(SecureState):
                         100.0 if sub.time_spent > 0 else 0.0
                     )
                 )
+                category.subcategories[sub_idx] = sub
                 subcategory_found = True
                 break
         if not subcategory_found:
@@ -785,6 +788,7 @@ class WellnessState(SecureState):
             self.tracking_category_id
         )
         if not category:
+            self._reset_tracker_inputs()
             return rx.toast.error(
                 "Selected category not found."
             )
@@ -797,6 +801,7 @@ class WellnessState(SecureState):
             None,
         )
         if not subcategory:
+            self._reset_tracker_inputs()
             return rx.toast.error(
                 "Selected subcategory not found."
             )
@@ -992,9 +997,12 @@ class WellnessState(SecureState):
             == subcategory_id_to_delete
         ):
             self.selected_subcategory_for_entry = ""
+        original_subcategories = list(
+            category.subcategories
+        )
         category.subcategories = [
             sub
-            for sub in category.subcategories
+            for sub in original_subcategories
             if sub.id != subcategory_id_to_delete
         ]
         self._recalculate_category_progress(category_id)
