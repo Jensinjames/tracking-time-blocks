@@ -22,8 +22,8 @@ def daily_overview_card_component(
                 rx.icon(
                     tag=rx.cond(
                         stat.change_percent >= 0,
-                        "arrow-up-s-line",
-                        "arrow-down-s-line",
+                        "arrow-up",
+                        "arrow-down",
                     ),
                     class_name=f"w-4 h-4 {stat.change_color}",
                 ),

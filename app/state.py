@@ -86,7 +86,7 @@ class EntryData(TypedDict):
 class WellnessState(SecureState):
     daily_stats: list[DailyStat] = [
         DailyStat(
-            icon="time_line",
+            icon="timer",
             icon_color="text-blue-500",
             icon_bg_color="bg-blue-100",
             title="Time Tracked",
@@ -96,7 +96,7 @@ class WellnessState(SecureState):
             change_color="text-green-500",
         ),
         DailyStat(
-            icon="check_circle_line",
+            icon="check-circle",
             icon_color="text-green-500",
             icon_bg_color="bg-green-100",
             title="Goals Achieved",
@@ -106,7 +106,7 @@ class WellnessState(SecureState):
             change_color="text-red-500",
         ),
         DailyStat(
-            icon="mood_line",
+            icon="smile",
             icon_color="text-yellow-500",
             icon_bg_color="bg-yellow-100",
             title="Mood Score",
@@ -116,7 +116,7 @@ class WellnessState(SecureState):
             change_color="text-green-500",
         ),
         DailyStat(
-            icon="heart_line",
+            icon="heart",
             icon_color="text-pink-500",
             icon_bg_color="bg-pink-100",
             title="Wellness Score",

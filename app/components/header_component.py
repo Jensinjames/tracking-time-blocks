@@ -1,8 +1,16 @@
 import reflex as rx
 from app.state import WellnessState
+from app.config import settings
 
 
 def header_component() -> rx.Component:
+    flower_icon_tag = (
+        "flower-2"
+        if "flower-2" in settings.ICONS_LIST
+        else "flower"
+    )
+    user_icon_tag = "user-cog"
+    logout_icon_tag = "log-out"
     return rx.el.div(
         rx.el.div(
             rx.el.h1(
@@ -12,14 +20,14 @@ def header_component() -> rx.Component:
             rx.el.div(
                 rx.el.button(
                     rx.icon(
-                        tag="flower_2",
+                        tag=flower_icon_tag,
                         class_name="text-gray-600",
                     ),
                     class_name="p-2 rounded-md hover:bg-gray-100",
                 ),
                 rx.el.div(
                     rx.icon(
-                        tag="user_pen",
+                        tag=user_icon_tag,
                         class_name="text-gray-600",
                     ),
                     rx.el.span(
@@ -30,7 +38,7 @@ def header_component() -> rx.Component:
                 ),
                 rx.el.button(
                     rx.icon(
-                        tag="boom_box",
+                        tag=logout_icon_tag,
                         class_name="text-gray-600",
                     ),
                     rx.el.span(
