@@ -20,6 +20,15 @@ CREATE TABLE entries (
 
 
 
+CREATE TABLE playing_with_neon (
+	id SERIAL NOT NULL, 
+	name TEXT NOT NULL, 
+	value REAL, 
+	CONSTRAINT playing_with_neon_pkey PRIMARY KEY (id)
+)
+
+
+
 CREATE TABLE metrics (
 	id VARCHAR(50) NOT NULL, 
 	category_id VARCHAR(50) NOT NULL, 

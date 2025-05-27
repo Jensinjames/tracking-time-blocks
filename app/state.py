@@ -8,6 +8,7 @@ import time
 import asyncio
 import operator
 from app.states.auth_state import AuthState
+import uuid
 
 
 class DailyStat(rx.Base):
@@ -161,7 +162,7 @@ class WellnessState(SecureState):
         auth_s = await self.get_state(AuthState)
         if auth_s.logged_in_user_email:
             return auth_s.logged_in_user_email
-        return "Guest"
+        return settings.DEFAULT_USER
 
     def _get_color_details(
         self, color_key: str
@@ -253,7 +254,7 @@ class WellnessState(SecureState):
         )
         self.categories = self.categories.copy()
         yield rx.toast.success(
-            f"Category '{name}' created."
+            f"Category '{name}' created (in-memory)."
         )
 
     @rx.event
@@ -287,10 +288,10 @@ class WellnessState(SecureState):
                 "Selected parent category not found."
             )
         category = self.categories[category_id]
-        subcategory_id = f"{category_id}_{name.lower().replace(' ', '_')}"
+        subcategory_id = f"{category_id}_{name.lower().replace(' ', '_')}_{int(time.time())}"
         if any(
             (
-                sub.id == subcategory_id
+                sub.name == name
                 for sub in category.subcategories
             )
         ):
@@ -315,7 +316,7 @@ class WellnessState(SecureState):
         if self.tracking_category_id == category_id:
             self.tracking_category_id = category_id
         yield rx.toast.success(
-            f"Subcategory '{name}' added to '{category.name}'."
+            f"Subcategory '{name}' added to '{category.name}' (in-memory)."
         )
 
     @rx.event
@@ -378,7 +379,7 @@ class WellnessState(SecureState):
         self.selected_subcategory_for_entry = ""
         self.new_time_entry_hours = "0.5"
         yield rx.toast.success(
-            f"Logged {hours_spent:.2f} hrs for subcategory."
+            f"Logged {hours_spent:.2f} hrs for subcategory (in-memory)."
         )
 
     @rx.event
@@ -606,113 +607,207 @@ class WellnessState(SecureState):
             return f"{self.current_category_detail.name} Progress"
         return "Overall Progress"
 
-    @rx.event
-    def initial_app_load(self):
-        if not self.categories:
-            initial_categories_data = [
-                {
-                    "id": "fitness",
-                    "name": "Fitness",
-                    "icon": "heart_pulse",
-                    "color_key": "blue",
-                    "subs": [
-                        ("Morning Run", 1, 0.5),
-                        ("Gym Session", 4, 1.5),
-                    ],
-                },
-                {
-                    "id": "learning",
-                    "name": "Learning",
-                    "icon": "book_open",
-                    "color_key": "green",
-                    "subs": [
-                        ("Online Course", 8, 7),
-                        ("Read Book", 2, 1),
-                    ],
-                },
-                {
-                    "id": "mindfulness",
-                    "name": "Mindfulness",
-                    "icon": "plant",
-                    "color_key": "teal",
-                    "subs": [
-                        ("Meditation", 0.5, 0.25),
-                        ("Journaling", 0.5, 0.5),
-                    ],
-                },
-            ]
-            for cat_data in initial_categories_data:
-                color_details = self._get_color_details(
-                    cat_data["color_key"]
+    @rx.event(background=True)
+    async def initial_app_load(self):
+        async with self:
+            self.categories = {}
+            self.current_category_detail = None
+        temp_categories: Dict[str, CategoryDetail] = {}
+        try:
+            async with rx.asession() as session:
+                cat_result = await session.execute(
+                    text(
+                        "SELECT id, name, icon, color FROM categories WHERE enabled = true"
+                    )
                 )
-                category = CategoryDetail(
-                    id=cat_data["id"],
-                    name=cat_data["name"],
-                    icon=cat_data["icon"],
-                    color_key=cat_data["color_key"],
-                    total_allocated_time=0.0,
-                    total_time_spent=0.0,
-                    overall_progress=0.0,
-                    subcategories=[],
-                    color_bg_class=color_details["bg"],
-                    color_text_class=color_details["text"],
-                    color_border_class=color_details[
-                        "border"
-                    ],
-                    color_progress_bg_class=color_details[
-                        "progress_bg"
-                    ],
-                    base_color_hex=color_details["base"],
-                )
-                for (
-                    sub_name,
-                    sub_alloc,
-                    sub_spent,
-                ) in cat_data["subs"]:
-                    sub_id = f"{category.id}_{sub_name.lower().replace(' ', '_')}"
-                    sub_progress = (
+                db_categories = cat_result.all()
+                for db_cat in db_categories:
+                    (
+                        cat_id,
+                        cat_name,
+                        cat_icon,
+                        cat_color_key,
+                    ) = db_cat
+                    color_details = self._get_color_details(
+                        cat_color_key
+                        or settings.DEFAULT_COLOR_KEY
+                    )
+                    current_cat_subcategories: List[
+                        SubCategoryGoal
+                    ] = []
+                    metrics_result = await session.execute(
+                        text(
+                            "SELECT id, name FROM metrics WHERE category_id = :cat_id"
+                        ),
+                        {"cat_id": cat_id},
+                    )
+                    db_metrics = metrics_result.all()
+                    total_cat_allocated_time = 0.0
+                    total_cat_spent_time = 0.0
+                    for db_metric in db_metrics:
+                        metric_id, metric_name = db_metric
+                        goal_result = await session.execute(
+                            text(
+                                "SELECT value FROM goals WHERE category_id = :cat_id AND metric_id = :metric_id"
+                            ),
+                            {
+                                "cat_id": cat_id,
+                                "metric_id": metric_id,
+                            },
+                        )
+                        db_goal = (
+                            goal_result.scalar_one_or_none()
+                        )
+                        allocated_time = (
+                            float(db_goal)
+                            if db_goal is not None
+                            else 0.0
+                        )
+                        entry_metrics_result = await session.execute(
+                            text(
+                                "\n                                SELECT COALESCE(SUM(em.value), 0) \n                                FROM entry_metrics em\n                                JOIN entries e ON em.entry_id = e.id\n                                WHERE em.category_id = :cat_id AND em.metric_id = :metric_id\n                            "
+                            ),
+                            {
+                                "cat_id": cat_id,
+                                "metric_id": metric_id,
+                            },
+                        )
+                        time_spent = float(
+                            entry_metrics_result.scalar_one()
+                        )
+                        progress = (
+                            round(
+                                time_spent
+                                / allocated_time
+                                * 100,
+                                1,
+                            )
+                            if allocated_time > 0
+                            else (
+                                100.0
+                                if time_spent > 0
+                                else 0.0
+                            )
+                        )
+                        current_cat_subcategories.append(
+                            SubCategoryGoal(
+                                id=metric_id,
+                                name=metric_name,
+                                allocated_time=allocated_time,
+                                time_spent=time_spent,
+                                progress=progress,
+                            )
+                        )
+                        total_cat_allocated_time += (
+                            allocated_time
+                        )
+                        total_cat_spent_time += time_spent
+                    overall_cat_progress = (
                         round(
-                            sub_spent / sub_alloc * 100, 1
+                            total_cat_spent_time
+                            / total_cat_allocated_time
+                            * 100,
+                            1,
                         )
-                        if sub_alloc > 0
-                        else 0
+                        if total_cat_allocated_time > 0
+                        else 0.0
                     )
-                    category.subcategories.append(
-                        SubCategoryGoal(
-                            id=sub_id,
-                            name=sub_name,
-                            allocated_time=sub_alloc,
-                            time_spent=sub_spent,
-                            progress=sub_progress,
+                    temp_categories[cat_id] = (
+                        CategoryDetail(
+                            id=cat_id,
+                            name=cat_name,
+                            icon=cat_icon or "box",
+                            color_key=cat_color_key
+                            or settings.DEFAULT_COLOR_KEY,
+                            total_allocated_time=total_cat_allocated_time,
+                            total_time_spent=total_cat_spent_time,
+                            overall_progress=overall_cat_progress,
+                            subcategories=current_cat_subcategories,
+                            color_bg_class=color_details[
+                                "bg"
+                            ],
+                            color_text_class=color_details[
+                                "text"
+                            ],
+                            color_border_class=color_details[
+                                "border"
+                            ],
+                            color_progress_bg_class=color_details[
+                                "progress_bg"
+                            ],
+                            base_color_hex=color_details[
+                                "base"
+                            ],
                         )
                     )
-                self.categories[category.id] = category
-                self._recalculate_category_progress(
-                    category.id
-                )
-            self.categories = self.categories.copy()
+            async with self:
+                self.categories = temp_categories
+                if not self.categories:
+                    yield rx.toast.info(
+                        "No categories found in the database. Add some to get started!"
+                    )
+                else:
+                    yield rx.toast.success(
+                        f"Loaded {len(self.categories)} categories from database."
+                    )
+        except Exception as e:
+            print(
+                f"Error during initial app load from DB: {e}"
+            )
+            async with self:
+                self.categories = {}
+            yield rx.toast.error(
+                "Failed to load category data from database. Check server logs."
+            )
         yield WellnessState.load_entries
 
     @rx.event(background=True)
     async def load_entries(self):
         async with self:
             self.loading_entries = True
+            self.entries = []
         try:
-            current_selected_date = (
-                self.selected_date
-                if self.selected_date
-                else date.today().isoformat()
-            )
-            await asyncio.sleep(0.1)
+            selected_date_obj = datetime.strptime(
+                self.selected_date, "%Y-%m-%d"
+            ).date()
+            async with rx.asession() as session:
+                result = await session.execute(
+                    text(
+                        "SELECT id, date, created_at FROM entries WHERE date = :selected_date_param ORDER BY created_at DESC"
+                    ),
+                    {
+                        "selected_date_param": selected_date_obj
+                    },
+                )
+                db_entries = result.all()
+                loaded_entries_data: List[EntryData] = []
+                for row in db_entries:
+                    (
+                        entry_id,
+                        entry_date_obj,
+                        entry_created_at_obj,
+                    ) = row
+                    loaded_entries_data.append(
+                        EntryData(
+                            id=str(entry_id),
+                            entry_date=entry_date_obj.isoformat(),
+                            created_at=entry_created_at_obj.isoformat(),
+                        )
+                    )
+            async with self:
+                self.entries = loaded_entries_data
+                self.loading_entries = False
+                if not self.entries:
+                    yield rx.toast.info(
+                        f"No entries found for {self.selected_date}."
+                    )
+        except Exception as e:
+            print(f"Error loading entries from DB: {e}")
             async with self:
                 self.entries = []
                 self.loading_entries = False
-        except Exception as e:
-            async with self:
-                self.loading_entries = False
-            print(f"Error loading entries: {e}")
             yield rx.toast.error(
-                f"Failed to load entries. Check server logs."
+                f"Failed to load entries for {self.selected_date}. Check server logs."
             )
 
     @rx.event
@@ -789,7 +884,7 @@ class WellnessState(SecureState):
         if not category:
             self._reset_tracker_inputs()
             return rx.toast.error(
-                "Selected category not found."
+                "Selected category not found. Please reselect."
             )
         subcategory = next(
             (
@@ -802,7 +897,7 @@ class WellnessState(SecureState):
         if not subcategory:
             self._reset_tracker_inputs()
             return rx.toast.error(
-                "Selected subcategory not found."
+                "Selected subcategory not found. Please reselect."
             )
         self.is_tracking_active = True
         self.tracking_start_time = time.time()
@@ -832,14 +927,14 @@ class WellnessState(SecureState):
             or not subcategory_id_to_log
         ):
             yield rx.toast.error(
-                "Error: Tracked category/subcategory ID missing when stopping."
+                "Error: Tracked category/subcategory ID missing when stopping. Logging aborted."
             )
             self._reset_tracker_inputs()
             return
         category = self.categories.get(category_id_to_log)
         if not category:
             yield rx.toast.error(
-                f"Error: Category '{category_id_to_log}' not found for logging."
+                f"Error: Category '{category_id_to_log}' not found for logging. Time not logged."
             )
             self._reset_tracker_inputs()
             return
@@ -868,7 +963,7 @@ class WellnessState(SecureState):
                 break
         if not subcategory_target:
             yield rx.toast.error(
-                f"Error: Subcategory '{subcategory_id_to_log}' not found in '{category.name}' for logging."
+                f"Error: Subcategory '{subcategory_id_to_log}' not found in '{category.name}' for logging. Time not logged."
             )
             self._reset_tracker_inputs()
             return
@@ -877,7 +972,7 @@ class WellnessState(SecureState):
         )
         self.categories = self.categories.copy()
         yield rx.toast.success(
-            f"Logged {duration_hours:.2f} hrs to '{subcategory_target.name}'."
+            f"Logged {duration_hours:.2f} hrs to '{subcategory_target.name}' (in-memory)."
         )
         self._reset_tracker_inputs()
 
@@ -950,7 +1045,7 @@ class WellnessState(SecureState):
         del self.categories[category_id_to_delete]
         self.categories = self.categories.copy()
         yield rx.toast.success(
-            f"Category '{category_name}' deleted."
+            f"Category '{category_name}' deleted (in-memory)."
         )
 
     @rx.event
@@ -1010,10 +1105,10 @@ class WellnessState(SecureState):
             and self.current_category_detail.id
             == category_id
         ):
-            self.current_category_detail = self.categories[
-                category_id
-            ]
+            self.current_category_detail = (
+                self.categories.get(category_id)
+            )
         self.categories = self.categories.copy()
         yield rx.toast.success(
-            f"Subcategory '{subcategory_name}' from '{category.name}' deleted."
+            f"Subcategory '{subcategory_name}' from '{category.name}' deleted (in-memory)."
         )

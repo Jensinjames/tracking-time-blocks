@@ -49,8 +49,6 @@ class AuthState(rx.State):
             )
             return rx.redirect("/")
         else:
-            self.in_session = False
-            self.logged_in_user_email = None
             yield rx.toast.error(
                 "Invalid email or password."
             )
@@ -64,5 +62,9 @@ class AuthState(rx.State):
 
     @rx.event
     def check_session(self):
-        if not self.in_session:
+        if self.in_session and self.logged_in_user_email:
+            return
+        else:
+            self.in_session = False
+            self.logged_in_user_email = None
             return rx.redirect("/sign-in")
