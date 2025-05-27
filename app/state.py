@@ -400,9 +400,8 @@ class WellnessState(SecureState):
                 yield rx.toast.error("Category not found.")
 
     @rx.event
-    async def logout(self):
-        auth_s = await self.get_state(AuthState)
-        yield auth_s.sign_out()
+    def logout(self):
+        return AuthState.sign_out
 
     @rx.var
     def category_options_for_select(
