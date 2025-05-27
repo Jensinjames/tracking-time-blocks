@@ -8,20 +8,34 @@ from app.state import (
 
 def sub_category_progress_item(
     sub_category: SubCategoryGoal,
+    category_id: str,
     bar_fill_color_class: str,
     text_highlight_color_class: str,
 ) -> rx.Component:
     return rx.el.div(
         rx.el.div(
-            rx.el.p(
-                sub_category.name,
-                class_name="text-sm font-medium text-gray-700",
+            rx.el.div(
+                rx.el.p(
+                    sub_category.name,
+                    class_name="text-sm font-medium text-gray-700 flex-1",
+                ),
+                rx.el.button(
+                    rx.icon(
+                        tag="trash_2",
+                        class_name="w-4 h-4 text-red-500 hover:text-red-700",
+                    ),
+                    on_click=lambda: WellnessState.delete_subcategory_goal(
+                        category_id, sub_category.id
+                    ),
+                    class_name="p-1 rounded hover:bg-red-100 transition-colors",
+                    title=f"Delete subcategory {sub_category.name}",
+                ),
+                class_name="flex justify-between items-center",
             ),
             rx.el.p(
                 f"{sub_category.time_spent:.1f} / {sub_category.allocated_time:.1f} hrs",
                 class_name=f"text-xs {text_highlight_color_class} font-semibold",
             ),
-            class_name="flex justify-between items-baseline",
         ),
         rx.el.div(
             rx.el.div(
@@ -57,6 +71,18 @@ def category_detail_card_component(
                     "Overall Progress",
                     class_name="text-sm text-gray-500",
                 ),
+                class_name="flex-1",
+            ),
+            rx.el.button(
+                rx.icon(
+                    tag="trash_2",
+                    class_name="w-5 h-5 text-red-600 hover:text-red-700",
+                ),
+                on_click=lambda: WellnessState.delete_category(
+                    category_detail.id
+                ),
+                class_name="p-2 rounded-md hover:bg-red-100 transition-colors",
+                title=f"Delete category {category_detail.name}",
             ),
             class_name="flex items-center mb-4 pb-4 border-b border-gray-200",
         ),
@@ -94,6 +120,7 @@ def category_detail_card_component(
                     category_detail.subcategories,
                     lambda sub_cat: sub_category_progress_item(
                         sub_cat,
+                        category_detail.id,
                         category_detail.color_progress_bg_class,
                         category_detail.color_text_class,
                     ),

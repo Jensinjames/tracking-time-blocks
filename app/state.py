@@ -6,6 +6,7 @@ from datetime import date, datetime
 from sqlalchemy import text
 import time
 import asyncio
+import operator
 
 
 class DailyStat(rx.Base):
@@ -306,10 +307,10 @@ class WellnessState(SecureState):
         )
         category.subcategories.append(new_sub)
         self._recalculate_category_progress(category_id)
+        self.categories = self.categories.copy()
         self.selected_category_for_subcategory = ""
         self.new_subcategory_name = ""
         self.new_subcategory_allocated_time = "1.0"
-        self.categories = self.categories.copy()
         if self.selected_category_for_entry == category_id:
             self.selected_category_for_entry = category_id
         if self.tracking_category_id == category_id:
@@ -370,6 +371,7 @@ class WellnessState(SecureState):
                 "Selected subcategory not found."
             )
         self._recalculate_category_progress(category_id)
+        self.categories = self.categories.copy()
         self.selected_category_for_entry = ""
         self.selected_subcategory_for_entry = ""
         self.new_time_entry_hours = "0.5"
@@ -406,10 +408,13 @@ class WellnessState(SecureState):
     def category_options_for_select(
         self,
     ) -> list[SelectOption]:
-        return [
-            {"label": cat.name, "value": cat.id}
-            for cat_id, cat in self.categories.items()
-        ]
+        return sorted(
+            [
+                {"label": cat.name, "value": cat.id}
+                for cat_id, cat in self.categories.items()
+            ],
+            key=operator.itemgetter("label"),
+        )
 
     @rx.var
     def subcategory_options_for_select(
@@ -423,42 +428,51 @@ class WellnessState(SecureState):
             category = self.categories[
                 self.selected_category_for_entry
             ]
-            return [
-                {"label": sub.name, "value": sub.id}
-                for sub in category.subcategories
-            ]
+            return sorted(
+                [
+                    {"label": sub.name, "value": sub.id}
+                    for sub in category.subcategories
+                ],
+                key=operator.itemgetter("label"),
+            )
         return []
 
     @rx.var
     def category_summary_list(
         self,
     ) -> list[CategorySummaryItem]:
-        return [
-            CategorySummaryItem(
-                id=cat.id,
-                name=cat.name,
-                icon=cat.icon,
-                color_text_class=cat.color_text_class,
-                color_bg_class=cat.color_bg_class,
-            )
-            for cat_id, cat in self.categories.items()
-        ]
+        return sorted(
+            [
+                CategorySummaryItem(
+                    id=cat.id,
+                    name=cat.name,
+                    icon=cat.icon,
+                    color_text_class=cat.color_text_class,
+                    color_bg_class=cat.color_bg_class,
+                )
+                for cat_id, cat in self.categories.items()
+            ],
+            key=operator.attrgetter("name"),
+        )
 
     @rx.var
     def compact_categories_list(
         self,
     ) -> list[CompactCategoryData]:
-        return [
-            CompactCategoryData(
-                id=cat.id,
-                name=cat.name,
-                icon=cat.icon,
-                progress=cat.overall_progress,
-                color_text_class=cat.color_text_class,
-                color_progress_class=cat.color_progress_bg_class,
-            )
-            for cat_id, cat in self.categories.items()
-        ]
+        return sorted(
+            [
+                CompactCategoryData(
+                    id=cat.id,
+                    name=cat.name,
+                    icon=cat.icon,
+                    progress=cat.overall_progress,
+                    color_text_class=cat.color_text_class,
+                    color_progress_class=cat.color_progress_bg_class,
+                )
+                for cat_id, cat in self.categories.items()
+            ],
+            key=operator.attrgetter("name"),
+        )
 
     @rx.var
     def composite_donut_data(self) -> list[PieChartSegment]:
@@ -506,7 +520,7 @@ class WellnessState(SecureState):
             if not data:
                 return [
                     PieChartSegment(
-                        name=f"No Activity in {category.name}",
+                        name=f"No Activity or Allocation in {category.name}",
                         value=100,
                         fill="#D1D5DB",
                         base_color="#D1D5DB",
@@ -517,7 +531,7 @@ class WellnessState(SecureState):
             if not self.categories:
                 return [
                     PieChartSegment(
-                        name="No Data",
+                        name="No Categories Defined",
                         value=100,
                         fill="#E5E7EB",
                         base_color="#E5E7EB",
@@ -529,42 +543,30 @@ class WellnessState(SecureState):
                 category_item,
             ) in self.categories.items():
                 base_hex = category_item.base_color_hex
-                if category_item.total_time_spent > 0.001:
-                    grad_id_spent = (
-                        f"gradient_{category_item.id}_spent"
-                    )
-                    data.append(
-                        PieChartSegment(
-                            name=f"{category_item.name} (Spent)",
-                            value=category_item.total_time_spent,
-                            fill=f"url(#{grad_id_spent})",
-                            base_color=base_hex,
-                            gradient_id=grad_id_spent,
-                        )
-                    )
-                allocated_remaining_value = (
+                if (
                     category_item.total_allocated_time
-                    - category_item.total_time_spent
-                )
-                if allocated_remaining_value > 0.001:
-                    grad_id_allocated = f"gradient_{category_item.id}_allocated_remaining"
+                    > 0.001
+                ):
+                    grad_id_total_cat = (
+                        f"gradient_{category_item.id}_total"
+                    )
                     data.append(
                         PieChartSegment(
-                            name=f"{category_item.name} (Remaining Allocation)",
-                            value=allocated_remaining_value,
-                            fill=f"url(#{grad_id_allocated})",
+                            name=f"{category_item.name}",
+                            value=category_item.total_allocated_time,
+                            fill=f"url(#{grad_id_total_cat})",
                             base_color=base_hex,
-                            gradient_id=grad_id_allocated,
+                            gradient_id=grad_id_total_cat,
                         )
                     )
             if not data:
                 return [
                     PieChartSegment(
-                        name="No Activity Data",
+                        name="No Time Allocated in Categories",
                         value=100,
                         fill="#D1D5DB",
                         base_color="#D1D5DB",
-                        gradient_id="grad_no_activity",
+                        gradient_id="grad_no_allocation",
                     )
                 ]
         return data
@@ -689,6 +691,7 @@ class WellnessState(SecureState):
                 self._recalculate_category_progress(
                     category.id
                 )
+            self.categories = self.categories.copy()
         yield WellnessState.load_entries
 
     @rx.event(background=True)
@@ -701,33 +704,9 @@ class WellnessState(SecureState):
                 if self.selected_date
                 else date.today().isoformat()
             )
-            async with rx.asession() as session:
-                result = await session.execute(
-                    text(
-                        "SELECT id, date, created_at FROM entries WHERE DATE(created_at) = :selected_date_param ORDER BY created_at DESC"
-                    ),
-                    {
-                        "selected_date_param": current_selected_date
-                    },
-                )
-                rows = result.fetchall()
+            await asyncio.sleep(0.1)
             async with self:
-                self.entries = [
-                    EntryData(
-                        id=str(row.id),
-                        entry_date=(
-                            row.date.isoformat()
-                            if row.date
-                            else ""
-                        ),
-                        created_at=(
-                            row.created_at.isoformat()
-                            if row.created_at
-                            else ""
-                        ),
-                    )
-                    for row in rows
-                ]
+                self.entries = []
                 self.loading_entries = False
         except Exception as e:
             async with self:
@@ -859,37 +838,43 @@ class WellnessState(SecureState):
         category = self.categories.get(category_id_to_log)
         if not category:
             yield rx.toast.error(
-                f"Error: Category '{category_id_to_log}' not found."
+                f"Error: Category '{category_id_to_log}' not found for logging."
             )
             self._reset_tracker_inputs()
             return
         subcategory_target = None
-        for sub in category.subcategories:
-            if sub.id == subcategory_id_to_log:
-                subcategory_target = sub
-                sub.time_spent += duration_hours
-                sub.progress = (
+        for sub_idx, sub_val in enumerate(
+            category.subcategories
+        ):
+            if sub_val.id == subcategory_id_to_log:
+                sub_val.time_spent += duration_hours
+                sub_val.progress = (
                     round(
-                        sub.time_spent
-                        / sub.allocated_time
+                        sub_val.time_spent
+                        / sub_val.allocated_time
                         * 100,
                         1,
                     )
-                    if sub.allocated_time > 0
+                    if sub_val.allocated_time > 0
                     else (
-                        100.0 if sub.time_spent > 0 else 0.0
+                        100.0
+                        if sub_val.time_spent > 0
+                        else 0.0
                     )
                 )
+                category.subcategories[sub_idx] = sub_val
+                subcategory_target = sub_val
                 break
         if not subcategory_target:
             yield rx.toast.error(
-                f"Error: Subcategory '{subcategory_id_to_log}' not found in '{category.name}'."
+                f"Error: Subcategory '{subcategory_id_to_log}' not found in '{category.name}' for logging."
             )
             self._reset_tracker_inputs()
             return
         self._recalculate_category_progress(
             category_id_to_log
         )
+        self.categories = self.categories.copy()
         yield rx.toast.success(
             f"Logged {duration_hours:.2f} hrs to '{subcategory_target.name}'."
         )
@@ -915,8 +900,116 @@ class WellnessState(SecureState):
             category = self.categories[
                 self.tracking_category_id
             ]
-            return [
-                {"label": sub.name, "value": sub.id}
-                for sub in category.subcategories
-            ]
+            return sorted(
+                [
+                    {"label": sub.name, "value": sub.id}
+                    for sub in category.subcategories
+                ],
+                key=operator.itemgetter("label"),
+            )
         return []
+
+    @rx.event
+    def delete_category(self, category_id_to_delete: str):
+        if category_id_to_delete not in self.categories:
+            return rx.toast.error(
+                "Category not found for deletion."
+            )
+        category_name = self.categories[
+            category_id_to_delete
+        ].name
+        if (
+            self.tracking_category_id
+            == category_id_to_delete
+        ):
+            if self.is_tracking_active:
+                self.is_tracking_active = False
+                self.tracking_start_time = None
+                yield rx.toast.info(
+                    f"Tracking stopped as category '{category_name}' was deleted."
+                )
+            self._reset_tracker_inputs()
+        if (
+            self.current_category_detail
+            and self.current_category_detail.id
+            == category_id_to_delete
+        ):
+            self.current_category_detail = None
+        if (
+            self.selected_category_for_subcategory
+            == category_id_to_delete
+        ):
+            self.selected_category_for_subcategory = ""
+        if (
+            self.selected_category_for_entry
+            == category_id_to_delete
+        ):
+            self.selected_category_for_entry = ""
+            self.selected_subcategory_for_entry = ""
+        del self.categories[category_id_to_delete]
+        self.categories = self.categories.copy()
+        yield rx.toast.success(
+            f"Category '{category_name}' deleted."
+        )
+
+    @rx.event
+    def delete_subcategory_goal(
+        self,
+        category_id: str,
+        subcategory_id_to_delete: str,
+    ):
+        if category_id not in self.categories:
+            return rx.toast.error(
+                "Parent category not found for subcategory deletion."
+            )
+        category = self.categories[category_id]
+        subcategory_to_delete = next(
+            (
+                sub
+                for sub in category.subcategories
+                if sub.id == subcategory_id_to_delete
+            ),
+            None,
+        )
+        if not subcategory_to_delete:
+            return rx.toast.error(
+                "Subcategory not found for deletion."
+            )
+        subcategory_name = subcategory_to_delete.name
+        if (
+            self.tracking_category_id == category_id
+            and self.tracking_subcategory_id
+            == subcategory_id_to_delete
+        ):
+            if self.is_tracking_active:
+                self.is_tracking_active = False
+                self.tracking_start_time = None
+                yield rx.toast.info(
+                    f"Tracking stopped as subcategory '{subcategory_name}' was deleted."
+                )
+            self.tracking_subcategory_id = ""
+            self.tracking_elapsed_time_str = "00:00:00"
+        if (
+            self.selected_category_for_entry == category_id
+            and self.selected_subcategory_for_entry
+            == subcategory_id_to_delete
+        ):
+            self.selected_subcategory_for_entry = ""
+        category.subcategories = [
+            sub
+            for sub in category.subcategories
+            if sub.id != subcategory_id_to_delete
+        ]
+        self._recalculate_category_progress(category_id)
+        if (
+            self.current_category_detail
+            and self.current_category_detail.id
+            == category_id
+        ):
+            self.current_category_detail = self.categories[
+                category_id
+            ]
+        self.categories = self.categories.copy()
+        yield rx.toast.success(
+            f"Subcategory '{subcategory_name}' from '{category.name}' deleted."
+        )
