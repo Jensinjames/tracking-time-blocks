@@ -7,6 +7,7 @@ from sqlalchemy import text
 import time
 import asyncio
 import operator
+from app.states.auth_state import AuthState
 
 
 class DailyStat(rx.Base):
@@ -157,8 +158,6 @@ class WellnessState(SecureState):
 
     @rx.var
     async def current_user(self) -> str:
-        from app.states.auth_state import AuthState
-
         auth_s = await self.get_state(AuthState)
         if auth_s.logged_in_user_email:
             return auth_s.logged_in_user_email
@@ -399,8 +398,6 @@ class WellnessState(SecureState):
 
     @rx.event
     async def logout(self):
-        from app.states.auth_state import AuthState
-
         auth_s = await self.get_state(AuthState)
         yield auth_s.sign_out()
 
