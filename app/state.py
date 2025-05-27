@@ -1,8 +1,8 @@
 import reflex as rx
-from typing import List, Dict, TypedDict, Optional, Any
+from typing import List, Dict, TypedDict, Optional
 from app.states.secure_state import SecureState
 from app.config import settings
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from sqlalchemy import text
 import time
 import asyncio
@@ -206,181 +206,301 @@ class WellnessState(SecureState):
             ):
                 self.current_category_detail = category
 
-    @rx.event
-    def create_new_category(self, form_data: dict):
-        name = form_data.get(
-            "new_category_name", ""
-        ).strip()
-        icon = form_data.get("new_category_icon")
-        color_key = form_data.get("new_category_color_key")
-        if not name or not icon or (not color_key):
-            return rx.toast.error(
-                "Category name, icon, and color are required."
+    @rx.event(background=True)
+    async def create_new_category(
+        self, form_data: dict[str, str]
+    ):
+        async with self:
+            name = form_data.get(
+                "new_category_name", ""
+            ).strip()
+            icon = form_data.get("new_category_icon")
+            color_key = form_data.get(
+                "new_category_color_key"
             )
-        category_id = name.lower().replace(" ", "_")
-        if category_id in self.categories:
-            return rx.toast.error(
-                f"Category '{name}' already exists."
-            )
-        color_details = self._get_color_details(color_key)
-        new_cat = CategoryDetail(
-            id=category_id,
-            name=name,
-            icon=icon,
-            color_key=color_key,
-            total_allocated_time=0.0,
-            total_time_spent=0.0,
-            overall_progress=0.0,
-            subcategories=[],
-            color_bg_class=color_details["bg"],
-            color_text_class=color_details["text"],
-            color_border_class=color_details["border"],
-            color_progress_bg_class=color_details[
-                "progress_bg"
-            ],
-            base_color_hex=color_details["base"],
-        )
-        self.categories[category_id] = new_cat
-        self.new_category_name = ""
-        self.new_category_icon = (
-            self.icons_options[0]
-            if self.icons_options
-            else "box"
-        )
-        self.new_category_color_key = (
-            self.color_key_options[0]
-            if self.color_key_options
-            else "blue"
-        )
-        self.categories = self.categories.copy()
-        yield rx.toast.success(
-            f"Category '{name}' created (in-memory)."
-        )
-
-    @rx.event
-    def add_subcategory_goal(self, form_data: dict):
-        category_id = form_data.get(
-            "selected_category_for_subcategory"
-        )
-        name = form_data.get(
-            "new_subcategory_name", ""
-        ).strip()
-        try:
-            allocated_time = float(
-                form_data.get(
-                    "new_subcategory_allocated_time", 0
+            if not name or not icon or (not color_key):
+                yield rx.toast.error(
+                    "Category name, icon, and color are required."
                 )
-            )
-        except ValueError:
-            return rx.toast.error(
-                "Invalid allocated time. Please enter a number."
-            )
-        if (
-            not category_id
-            or not name
-            or allocated_time <= 0
-        ):
-            return rx.toast.error(
-                "Parent category, subcategory name, and positive allocated time are required."
-            )
-        if category_id not in self.categories:
-            return rx.toast.error(
-                "Selected parent category not found."
-            )
-        category = self.categories[category_id]
-        subcategory_id = f"{category_id}_{name.lower().replace(' ', '_')}_{int(time.time())}"
-        if any(
-            (
-                sub.name == name
-                for sub in category.subcategories
-            )
-        ):
-            return rx.toast.error(
-                f"Subcategory '{name}' already exists in '{category.name}'."
-            )
-        new_sub = SubCategoryGoal(
-            id=subcategory_id,
-            name=name,
-            allocated_time=allocated_time,
-            time_spent=0.0,
-            progress=0.0,
-        )
-        category.subcategories.append(new_sub)
-        self._recalculate_category_progress(category_id)
-        self.categories = self.categories.copy()
-        self.selected_category_for_subcategory = ""
-        self.new_subcategory_name = ""
-        self.new_subcategory_allocated_time = "1.0"
-        if self.selected_category_for_entry == category_id:
-            self.selected_category_for_entry = category_id
-        if self.tracking_category_id == category_id:
-            self.tracking_category_id = category_id
-        yield rx.toast.success(
-            f"Subcategory '{name}' added to '{category.name}' (in-memory)."
-        )
-
-    @rx.event
-    def add_time_entry(self, form_data: dict):
-        category_id = form_data.get(
-            "selected_category_for_entry"
-        )
-        subcategory_id = form_data.get(
-            "selected_subcategory_for_entry"
-        )
-        try:
-            hours_spent = float(
-                form_data.get("new_time_entry_hours", 0)
-            )
-        except ValueError:
-            return rx.toast.error(
-                "Invalid time spent. Please enter a number."
-            )
-        if (
-            not category_id
-            or not subcategory_id
-            or hours_spent <= 0
-        ):
-            return rx.toast.error(
-                "Category, subcategory, and positive time spent are required."
-            )
-        if category_id not in self.categories:
-            return rx.toast.error(
-                "Selected category not found."
-            )
-        category = self.categories[category_id]
-        subcategory_found = False
-        for sub_idx, sub in enumerate(
-            category.subcategories
-        ):
-            if sub.id == subcategory_id:
-                sub.time_spent += hours_spent
-                sub.progress = (
-                    round(
-                        sub.time_spent
-                        / sub.allocated_time
-                        * 100,
-                        1,
-                    )
-                    if sub.allocated_time > 0
-                    else (
-                        100.0 if sub.time_spent > 0 else 0.0
-                    )
+                return
+            if any(
+                (
+                    cat.name == name
+                    for cat in self.categories.values()
                 )
-                category.subcategories[sub_idx] = sub
-                subcategory_found = True
-                break
-        if not subcategory_found:
-            return rx.toast.error(
-                "Selected subcategory not found."
+            ):
+                yield rx.toast.error(
+                    f"Category '{name}' already exists."
+                )
+                return
+            category_id = str(uuid.uuid4())
+            color_details = self._get_color_details(
+                color_key
             )
-        self._recalculate_category_progress(category_id)
-        self.categories = self.categories.copy()
-        self.selected_category_for_entry = ""
-        self.selected_subcategory_for_entry = ""
-        self.new_time_entry_hours = "0.5"
-        yield rx.toast.success(
-            f"Logged {hours_spent:.2f} hrs for subcategory (in-memory)."
-        )
+        async with rx.asession() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO categories (id, name, icon, color, enabled, description) VALUES (:id, :name, :icon, :color, :enabled, :description)"
+                ),
+                {
+                    "id": category_id,
+                    "name": name,
+                    "icon": icon,
+                    "color": color_key,
+                    "enabled": True,
+                    "description": f"Category for {name}",
+                },
+            )
+            await session.commit()
+        async with self:
+            new_cat = CategoryDetail(
+                id=category_id,
+                name=name,
+                icon=icon,
+                color_key=color_key,
+                total_allocated_time=0.0,
+                total_time_spent=0.0,
+                overall_progress=0.0,
+                subcategories=[],
+                color_bg_class=color_details["bg"],
+                color_text_class=color_details["text"],
+                color_border_class=color_details["border"],
+                color_progress_bg_class=color_details[
+                    "progress_bg"
+                ],
+                base_color_hex=color_details["base"],
+            )
+            self.categories[category_id] = new_cat
+            self.new_category_name = ""
+            self.new_category_icon = (
+                self.icons_options[0]
+                if self.icons_options
+                else "box"
+            )
+            self.new_category_color_key = (
+                self.color_key_options[0]
+                if self.color_key_options
+                else "blue"
+            )
+            self.categories = self.categories.copy()
+            yield rx.toast.success(
+                f"Category '{name}' created."
+            )
+
+    @rx.event(background=True)
+    async def add_subcategory_goal(
+        self, form_data: dict[str, str]
+    ):
+        async with self:
+            category_id = form_data.get(
+                "selected_category_for_subcategory"
+            )
+            name = form_data.get(
+                "new_subcategory_name", ""
+            ).strip()
+            try:
+                allocated_time_value = form_data.get(
+                    "new_subcategory_allocated_time", "0"
+                )
+                allocated_time = float(allocated_time_value)
+            except ValueError:
+                yield rx.toast.error(
+                    "Invalid allocated time. Please enter a number."
+                )
+                return
+            if (
+                not category_id
+                or not name
+                or allocated_time <= 0
+            ):
+                yield rx.toast.error(
+                    "Parent category, subcategory name, and positive allocated time are required."
+                )
+                return
+            if category_id not in self.categories:
+                yield rx.toast.error(
+                    "Selected parent category not found."
+                )
+                return
+            category = self.categories[category_id]
+            if any(
+                (
+                    sub.name == name
+                    for sub in category.subcategories
+                )
+            ):
+                yield rx.toast.error(
+                    f"Subcategory '{name}' already exists in '{category.name}'."
+                )
+                return
+            subcategory_id = str(uuid.uuid4())
+        async with rx.asession() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO metrics (id, category_id, name, unit, description) VALUES (:id, :category_id, :name, :unit, :description)"
+                ),
+                {
+                    "id": subcategory_id,
+                    "category_id": category_id,
+                    "name": name,
+                    "unit": "hours",
+                    "description": f"Subcategory goal: {name}",
+                },
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO goals (category_id, metric_id, value) VALUES (:category_id, :metric_id, :value)"
+                ),
+                {
+                    "category_id": category_id,
+                    "metric_id": subcategory_id,
+                    "value": allocated_time,
+                },
+            )
+            await session.commit()
+        async with self:
+            new_sub = SubCategoryGoal(
+                id=subcategory_id,
+                name=name,
+                allocated_time=allocated_time,
+                time_spent=0.0,
+                progress=0.0,
+            )
+            category.subcategories.append(new_sub)
+            self._recalculate_category_progress(category_id)
+            self.categories = self.categories.copy()
+            self.selected_category_for_subcategory = ""
+            self.new_subcategory_name = ""
+            self.new_subcategory_allocated_time = "1.0"
+            if (
+                self.selected_category_for_entry
+                == category_id
+            ):
+                self.selected_category_for_entry = (
+                    category_id
+                )
+            if self.tracking_category_id == category_id:
+                self.tracking_category_id = category_id
+            yield rx.toast.success(
+                f"Subcategory '{name}' added to '{category.name}'."
+            )
+
+    @rx.event(background=True)
+    async def add_time_entry(
+        self, form_data: dict[str, str]
+    ):
+        async with self:
+            category_id = form_data.get(
+                "selected_category_for_entry"
+            )
+            subcategory_id = form_data.get(
+                "selected_subcategory_for_entry"
+            )
+            try:
+                hours_spent_value = form_data.get(
+                    "new_time_entry_hours", "0"
+                )
+                hours_spent = float(hours_spent_value)
+            except ValueError:
+                yield rx.toast.error(
+                    "Invalid time spent. Please enter a number."
+                )
+                return
+            if (
+                not category_id
+                or not subcategory_id
+                or hours_spent <= 0
+            ):
+                yield rx.toast.error(
+                    "Category, subcategory, and positive time spent are required."
+                )
+                return
+            if category_id not in self.categories:
+                yield rx.toast.error(
+                    "Selected category not found."
+                )
+                return
+            category = self.categories[category_id]
+            subcategory_found = False
+            for sub in category.subcategories:
+                if sub.id == subcategory_id:
+                    subcategory_found = True
+                    break
+            if not subcategory_found:
+                yield rx.toast.error(
+                    "Selected subcategory not found."
+                )
+                return
+            entry_id = uuid.uuid4()
+            current_timestamp = datetime.now(timezone.utc)
+            current_date_str = self.selected_date
+        async with rx.asession() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO entries (id, date, created_at) VALUES (:id, :date, :created_at)"
+                ),
+                {
+                    "id": entry_id,
+                    "date": datetime.strptime(
+                        current_date_str, "%Y-%m-%d"
+                    ).date(),
+                    "created_at": current_timestamp,
+                },
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO entry_metrics (entry_id, category_id, metric_id, value) VALUES (:entry_id, :category_id, :metric_id, :value)"
+                ),
+                {
+                    "entry_id": entry_id,
+                    "category_id": category_id,
+                    "metric_id": subcategory_id,
+                    "value": hours_spent,
+                },
+            )
+            await session.commit()
+        async with self:
+            for sub_idx, sub_obj in enumerate(
+                category.subcategories
+            ):
+                if sub_obj.id == subcategory_id:
+                    sub_obj.time_spent += hours_spent
+                    sub_obj.progress = (
+                        round(
+                            sub_obj.time_spent
+                            / sub_obj.allocated_time
+                            * 100,
+                            1,
+                        )
+                        if sub_obj.allocated_time > 0
+                        else (
+                            100.0
+                            if sub_obj.time_spent > 0
+                            else 0.0
+                        )
+                    )
+                    category.subcategories[sub_idx] = (
+                        sub_obj
+                    )
+                    break
+            self._recalculate_category_progress(category_id)
+            self.categories = self.categories.copy()
+            if current_date_str == self.selected_date:
+                self.entries.insert(
+                    0,
+                    EntryData(
+                        id=str(entry_id),
+                        entry_date=current_date_str,
+                        created_at=current_timestamp.isoformat(),
+                    ),
+                )
+                self.entries = self.entries.copy()
+            self.selected_category_for_entry = ""
+            self.selected_subcategory_for_entry = ""
+            self.new_time_entry_hours = "0.5"
+            yield rx.toast.success(
+                f"Logged {hours_spent:.2f} hrs."
+            )
 
     @rx.event
     def handle_category_change_for_entry(
@@ -613,152 +733,135 @@ class WellnessState(SecureState):
             self.categories = {}
             self.current_category_detail = None
         temp_categories: Dict[str, CategoryDetail] = {}
-        try:
-            async with rx.asession() as session:
-                cat_result = await session.execute(
-                    text(
-                        "SELECT id, name, icon, color FROM categories WHERE enabled = true"
-                    )
+        async with rx.asession() as session:
+            cat_result = await session.execute(
+                text(
+                    "SELECT id, name, icon, color FROM categories WHERE enabled = true"
                 )
-                db_categories = cat_result.all()
-                for db_cat in db_categories:
-                    (
-                        cat_id,
-                        cat_name,
-                        cat_icon,
-                        cat_color_key,
-                    ) = db_cat
-                    color_details = self._get_color_details(
-                        cat_color_key
-                        or settings.DEFAULT_COLOR_KEY
-                    )
-                    current_cat_subcategories: List[
-                        SubCategoryGoal
-                    ] = []
-                    metrics_result = await session.execute(
+            )
+            db_categories = cat_result.all()
+            for db_cat in db_categories:
+                (
+                    cat_id,
+                    cat_name,
+                    cat_icon,
+                    cat_color_key,
+                ) = db_cat
+                color_details = self._get_color_details(
+                    cat_color_key
+                    or settings.DEFAULT_COLOR_KEY
+                )
+                current_cat_subcategories: List[
+                    SubCategoryGoal
+                ] = []
+                metrics_result = await session.execute(
+                    text(
+                        "SELECT id, name FROM metrics WHERE category_id = :cat_id"
+                    ),
+                    {"cat_id": cat_id},
+                )
+                db_metrics = metrics_result.all()
+                total_cat_allocated_time = 0.0
+                total_cat_spent_time = 0.0
+                for db_metric in db_metrics:
+                    metric_id, metric_name = db_metric
+                    goal_result = await session.execute(
                         text(
-                            "SELECT id, name FROM metrics WHERE category_id = :cat_id"
+                            "SELECT value FROM goals WHERE category_id = :cat_id AND metric_id = :metric_id"
                         ),
-                        {"cat_id": cat_id},
+                        {
+                            "cat_id": cat_id,
+                            "metric_id": metric_id,
+                        },
                     )
-                    db_metrics = metrics_result.all()
-                    total_cat_allocated_time = 0.0
-                    total_cat_spent_time = 0.0
-                    for db_metric in db_metrics:
-                        metric_id, metric_name = db_metric
-                        goal_result = await session.execute(
-                            text(
-                                "SELECT value FROM goals WHERE category_id = :cat_id AND metric_id = :metric_id"
-                            ),
-                            {
-                                "cat_id": cat_id,
-                                "metric_id": metric_id,
-                            },
-                        )
-                        db_goal = (
-                            goal_result.scalar_one_or_none()
-                        )
-                        allocated_time = (
-                            float(db_goal)
-                            if db_goal is not None
-                            else 0.0
-                        )
-                        entry_metrics_result = await session.execute(
-                            text(
-                                "\n                                SELECT COALESCE(SUM(em.value), 0) \n                                FROM entry_metrics em\n                                JOIN entries e ON em.entry_id = e.id\n                                WHERE em.category_id = :cat_id AND em.metric_id = :metric_id\n                            "
-                            ),
-                            {
-                                "cat_id": cat_id,
-                                "metric_id": metric_id,
-                            },
-                        )
-                        time_spent = float(
-                            entry_metrics_result.scalar_one()
-                        )
-                        progress = (
-                            round(
-                                time_spent
-                                / allocated_time
-                                * 100,
-                                1,
-                            )
-                            if allocated_time > 0
-                            else (
-                                100.0
-                                if time_spent > 0
-                                else 0.0
-                            )
-                        )
-                        current_cat_subcategories.append(
-                            SubCategoryGoal(
-                                id=metric_id,
-                                name=metric_name,
-                                allocated_time=allocated_time,
-                                time_spent=time_spent,
-                                progress=progress,
-                            )
-                        )
-                        total_cat_allocated_time += (
-                            allocated_time
-                        )
-                        total_cat_spent_time += time_spent
-                    overall_cat_progress = (
+                    db_goal = (
+                        goal_result.scalar_one_or_none()
+                    )
+                    allocated_time = (
+                        float(db_goal)
+                        if db_goal is not None
+                        else 0.0
+                    )
+                    entry_metrics_result = await session.execute(
+                        text(
+                            "\n                            SELECT COALESCE(SUM(em.value), 0) \n                            FROM entry_metrics em\n                            JOIN entries e ON em.entry_id = e.id\n                            WHERE em.category_id = :cat_id AND em.metric_id = :metric_id\n                            "
+                        ),
+                        {
+                            "cat_id": cat_id,
+                            "metric_id": metric_id,
+                        },
+                    )
+                    time_spent = float(
+                        entry_metrics_result.scalar_one()
+                    )
+                    progress = (
                         round(
-                            total_cat_spent_time
-                            / total_cat_allocated_time
+                            time_spent
+                            / allocated_time
                             * 100,
                             1,
                         )
-                        if total_cat_allocated_time > 0
-                        else 0.0
-                    )
-                    temp_categories[cat_id] = (
-                        CategoryDetail(
-                            id=cat_id,
-                            name=cat_name,
-                            icon=cat_icon or "box",
-                            color_key=cat_color_key
-                            or settings.DEFAULT_COLOR_KEY,
-                            total_allocated_time=total_cat_allocated_time,
-                            total_time_spent=total_cat_spent_time,
-                            overall_progress=overall_cat_progress,
-                            subcategories=current_cat_subcategories,
-                            color_bg_class=color_details[
-                                "bg"
-                            ],
-                            color_text_class=color_details[
-                                "text"
-                            ],
-                            color_border_class=color_details[
-                                "border"
-                            ],
-                            color_progress_bg_class=color_details[
-                                "progress_bg"
-                            ],
-                            base_color_hex=color_details[
-                                "base"
-                            ],
+                        if allocated_time > 0
+                        else (
+                            100.0 if time_spent > 0 else 0.0
                         )
                     )
-            async with self:
-                self.categories = temp_categories
-                if not self.categories:
-                    yield rx.toast.info(
-                        "No categories found in the database. Add some to get started!"
+                    current_cat_subcategories.append(
+                        SubCategoryGoal(
+                            id=metric_id,
+                            name=metric_name,
+                            allocated_time=allocated_time,
+                            time_spent=time_spent,
+                            progress=progress,
+                        )
                     )
-                else:
-                    yield rx.toast.success(
-                        f"Loaded {len(self.categories)} categories from database."
+                    total_cat_allocated_time += (
+                        allocated_time
                     )
-        except Exception as e:
-            print(
-                f"Error during initial app load from DB: {e}"
-            )
-            async with self:
-                self.categories = {}
-            yield rx.toast.error(
-                "Failed to load category data from database. Check server logs."
-            )
+                    total_cat_spent_time += time_spent
+                overall_cat_progress = (
+                    round(
+                        total_cat_spent_time
+                        / total_cat_allocated_time
+                        * 100,
+                        1,
+                    )
+                    if total_cat_allocated_time > 0
+                    else 0.0
+                )
+                temp_categories[cat_id] = CategoryDetail(
+                    id=cat_id,
+                    name=cat_name,
+                    icon=cat_icon or "box",
+                    color_key=cat_color_key
+                    or settings.DEFAULT_COLOR_KEY,
+                    total_allocated_time=total_cat_allocated_time,
+                    total_time_spent=total_cat_spent_time,
+                    overall_progress=overall_cat_progress,
+                    subcategories=sorted(
+                        current_cat_subcategories,
+                        key=operator.attrgetter("name"),
+                    ),
+                    color_bg_class=color_details["bg"],
+                    color_text_class=color_details["text"],
+                    color_border_class=color_details[
+                        "border"
+                    ],
+                    color_progress_bg_class=color_details[
+                        "progress_bg"
+                    ],
+                    base_color_hex=color_details["base"],
+                )
+        async with self:
+            self.categories = temp_categories
+            if not self.categories:
+                yield rx.toast.info(
+                    "No categories found in the database. Add some to get started!"
+                )
+            else:
+                yield rx.toast.success(
+                    f"Loaded {len(self.categories)} categories from database."
+                )
         yield WellnessState.load_entries
 
     @rx.event(background=True)
@@ -766,49 +869,38 @@ class WellnessState(SecureState):
         async with self:
             self.loading_entries = True
             self.entries = []
-        try:
-            selected_date_obj = datetime.strptime(
-                self.selected_date, "%Y-%m-%d"
-            ).date()
-            async with rx.asession() as session:
-                result = await session.execute(
-                    text(
-                        "SELECT id, date, created_at FROM entries WHERE date = :selected_date_param ORDER BY created_at DESC"
-                    ),
-                    {
-                        "selected_date_param": selected_date_obj
-                    },
-                )
-                db_entries = result.all()
-                loaded_entries_data: List[EntryData] = []
-                for row in db_entries:
-                    (
-                        entry_id,
-                        entry_date_obj,
-                        entry_created_at_obj,
-                    ) = row
-                    loaded_entries_data.append(
-                        EntryData(
-                            id=str(entry_id),
-                            entry_date=entry_date_obj.isoformat(),
-                            created_at=entry_created_at_obj.isoformat(),
-                        )
-                    )
-            async with self:
-                self.entries = loaded_entries_data
-                self.loading_entries = False
-                if not self.entries:
-                    yield rx.toast.info(
-                        f"No entries found for {self.selected_date}."
-                    )
-        except Exception as e:
-            print(f"Error loading entries from DB: {e}")
-            async with self:
-                self.entries = []
-                self.loading_entries = False
-            yield rx.toast.error(
-                f"Failed to load entries for {self.selected_date}. Check server logs."
+        selected_date_obj = datetime.strptime(
+            self.selected_date, "%Y-%m-%d"
+        ).date()
+        async with rx.asession() as session:
+            result = await session.execute(
+                text(
+                    "SELECT id, date, created_at FROM entries WHERE date = :selected_date_param ORDER BY created_at DESC"
+                ),
+                {"selected_date_param": selected_date_obj},
             )
+            db_entries = result.all()
+            loaded_entries_data: List[EntryData] = []
+            for row in db_entries:
+                (
+                    entry_id_uuid,
+                    entry_date_obj,
+                    entry_created_at_obj,
+                ) = row
+                loaded_entries_data.append(
+                    EntryData(
+                        id=str(entry_id_uuid),
+                        entry_date=entry_date_obj.isoformat(),
+                        created_at=entry_created_at_obj.isoformat(),
+                    )
+                )
+        async with self:
+            self.entries = loaded_entries_data
+            self.loading_entries = False
+            if not self.entries:
+                yield rx.toast.info(
+                    f"No entries found for {self.selected_date}."
+                )
 
     @rx.event
     def set_selected_date_and_load(self, new_date: str):
@@ -907,74 +999,123 @@ class WellnessState(SecureState):
             f"Tracking started for {category.name} ({subcategory.name})."
         )
 
-    @rx.event
-    def stop_activity_tracking(self):
-        if (
-            not self.is_tracking_active
-            or self.tracking_start_time is None
-        ):
-            return
-        elapsed_seconds = (
-            time.time() - self.tracking_start_time
-        )
-        duration_hours = elapsed_seconds / 3600
-        category_id_to_log = self.tracking_category_id
-        subcategory_id_to_log = self.tracking_subcategory_id
-        self.is_tracking_active = False
-        self.tracking_start_time = None
-        if (
-            not category_id_to_log
-            or not subcategory_id_to_log
-        ):
-            yield rx.toast.error(
-                "Error: Tracked category/subcategory ID missing when stopping. Logging aborted."
+    @rx.event(background=True)
+    async def stop_activity_tracking(self):
+        async with self:
+            if (
+                not self.is_tracking_active
+                or self.tracking_start_time is None
+            ):
+                return
+            elapsed_seconds = (
+                time.time() - self.tracking_start_time
             )
-            self._reset_tracker_inputs()
-            return
-        category = self.categories.get(category_id_to_log)
-        if not category:
-            yield rx.toast.error(
-                f"Error: Category '{category_id_to_log}' not found for logging. Time not logged."
+            duration_hours = elapsed_seconds / 3600
+            category_id_to_log = self.tracking_category_id
+            subcategory_id_to_log = (
+                self.tracking_subcategory_id
             )
-            self._reset_tracker_inputs()
-            return
-        subcategory_target = None
-        for sub_idx, sub_val in enumerate(
-            category.subcategories
-        ):
-            if sub_val.id == subcategory_id_to_log:
-                sub_val.time_spent += duration_hours
-                sub_val.progress = (
-                    round(
-                        sub_val.time_spent
-                        / sub_val.allocated_time
-                        * 100,
-                        1,
-                    )
-                    if sub_val.allocated_time > 0
-                    else (
-                        100.0
-                        if sub_val.time_spent > 0
-                        else 0.0
-                    )
+            self.is_tracking_active = False
+            self.tracking_start_time = None
+            if (
+                not category_id_to_log
+                or not subcategory_id_to_log
+            ):
+                self._reset_tracker_inputs()
+                yield rx.toast.error(
+                    "Error: Tracked category/subcategory ID missing when stopping. Logging aborted."
                 )
-                category.subcategories[sub_idx] = sub_val
-                subcategory_target = sub_val
-                break
-        if not subcategory_target:
-            yield rx.toast.error(
-                f"Error: Subcategory '{subcategory_id_to_log}' not found in '{category.name}' for logging. Time not logged."
+                return
+            category = self.categories.get(
+                category_id_to_log
+            )
+            if not category:
+                self._reset_tracker_inputs()
+                yield rx.toast.error(
+                    f"Error: Category '{category_id_to_log}' not found for logging. Time not logged."
+                )
+                return
+            subcategory_target = None
+            for sub_val in category.subcategories:
+                if sub_val.id == subcategory_id_to_log:
+                    subcategory_target = sub_val
+                    break
+            if not subcategory_target:
+                self._reset_tracker_inputs()
+                yield rx.toast.error(
+                    f"Error: Subcategory '{subcategory_id_to_log}' not found in '{category.name}' for logging. Time not logged."
+                )
+                return
+            entry_id = uuid.uuid4()
+            current_timestamp = datetime.now(timezone.utc)
+            current_date_str = date.today().isoformat()
+        async with rx.asession() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO entries (id, date, created_at) VALUES (:id, :date, :created_at)"
+                ),
+                {
+                    "id": entry_id,
+                    "date": datetime.strptime(
+                        current_date_str, "%Y-%m-%d"
+                    ).date(),
+                    "created_at": current_timestamp,
+                },
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO entry_metrics (entry_id, category_id, metric_id, value) VALUES (:entry_id, :category_id, :metric_id, :value)"
+                ),
+                {
+                    "entry_id": entry_id,
+                    "category_id": category_id_to_log,
+                    "metric_id": subcategory_id_to_log,
+                    "value": duration_hours,
+                },
+            )
+            await session.commit()
+        async with self:
+            for sub_idx, sub_obj in enumerate(
+                category.subcategories
+            ):
+                if sub_obj.id == subcategory_id_to_log:
+                    sub_obj.time_spent += duration_hours
+                    sub_obj.progress = (
+                        round(
+                            sub_obj.time_spent
+                            / sub_obj.allocated_time
+                            * 100,
+                            1,
+                        )
+                        if sub_obj.allocated_time > 0
+                        else (
+                            100.0
+                            if sub_obj.time_spent > 0
+                            else 0.0
+                        )
+                    )
+                    self.categories[
+                        category_id_to_log
+                    ].subcategories[sub_idx] = sub_obj
+                    break
+            self._recalculate_category_progress(
+                category_id_to_log
+            )
+            self.categories = self.categories.copy()
+            if current_date_str == self.selected_date:
+                self.entries.insert(
+                    0,
+                    EntryData(
+                        id=str(entry_id),
+                        entry_date=current_date_str,
+                        created_at=current_timestamp.isoformat(),
+                    ),
+                )
+                self.entries = self.entries.copy()
+            yield rx.toast.success(
+                f"Logged {duration_hours:.2f} hrs to '{subcategory_target.name}'."
             )
             self._reset_tracker_inputs()
-            return
-        self._recalculate_category_progress(
-            category_id_to_log
-        )
-        self.categories = self.categories.copy()
-        yield rx.toast.success(
-            f"Logged {duration_hours:.2f} hrs to '{subcategory_target.name}' (in-memory)."
-        )
-        self._reset_tracker_inputs()
 
     @rx.event
     def set_tracking_category(self, category_id: str):
@@ -1005,110 +1146,133 @@ class WellnessState(SecureState):
             )
         return []
 
-    @rx.event
-    def delete_category(self, category_id_to_delete: str):
-        if category_id_to_delete not in self.categories:
-            return rx.toast.error(
-                "Category not found for deletion."
-            )
-        category_name = self.categories[
-            category_id_to_delete
-        ].name
-        if (
-            self.tracking_category_id
-            == category_id_to_delete
-        ):
-            if self.is_tracking_active:
-                self.is_tracking_active = False
-                self.tracking_start_time = None
-                yield rx.toast.info(
-                    f"Tracking stopped as category '{category_name}' was deleted."
+    @rx.event(background=True)
+    async def delete_category(
+        self, category_id_to_delete: str
+    ):
+        async with self:
+            if category_id_to_delete not in self.categories:
+                yield rx.toast.error(
+                    "Category not found for deletion."
                 )
-            self._reset_tracker_inputs()
-        if (
-            self.current_category_detail
-            and self.current_category_detail.id
-            == category_id_to_delete
-        ):
-            self.current_category_detail = None
-        if (
-            self.selected_category_for_subcategory
-            == category_id_to_delete
-        ):
-            self.selected_category_for_subcategory = ""
-        if (
-            self.selected_category_for_entry
-            == category_id_to_delete
-        ):
-            self.selected_category_for_entry = ""
-            self.selected_subcategory_for_entry = ""
-        del self.categories[category_id_to_delete]
-        self.categories = self.categories.copy()
-        yield rx.toast.success(
-            f"Category '{category_name}' deleted (in-memory)."
-        )
+                return
+            category_name = self.categories[
+                category_id_to_delete
+            ].name
+            if (
+                self.tracking_category_id
+                == category_id_to_delete
+            ):
+                if self.is_tracking_active:
+                    self.is_tracking_active = False
+                    self.tracking_start_time = None
+                self._reset_tracker_inputs()
+        async with rx.asession() as session:
+            await session.execute(
+                text(
+                    "DELETE FROM categories WHERE id = :id"
+                ),
+                {"id": category_id_to_delete},
+            )
+            await session.commit()
+        async with self:
+            if (
+                self.current_category_detail
+                and self.current_category_detail.id
+                == category_id_to_delete
+            ):
+                self.current_category_detail = None
+            if (
+                self.selected_category_for_subcategory
+                == category_id_to_delete
+            ):
+                self.selected_category_for_subcategory = ""
+            if (
+                self.selected_category_for_entry
+                == category_id_to_delete
+            ):
+                self.selected_category_for_entry = ""
+                self.selected_subcategory_for_entry = ""
+            del self.categories[category_id_to_delete]
+            self.categories = self.categories.copy()
+            yield rx.toast.success(
+                f"Category '{category_name}' deleted."
+            )
 
-    @rx.event
-    def delete_subcategory_goal(
+    @rx.event(background=True)
+    async def delete_subcategory_goal(
         self,
         category_id: str,
         subcategory_id_to_delete: str,
     ):
-        if category_id not in self.categories:
-            return rx.toast.error(
-                "Parent category not found for subcategory deletion."
-            )
-        category = self.categories[category_id]
-        subcategory_to_delete = next(
-            (
-                sub
-                for sub in category.subcategories
-                if sub.id == subcategory_id_to_delete
-            ),
-            None,
-        )
-        if not subcategory_to_delete:
-            return rx.toast.error(
-                "Subcategory not found for deletion."
-            )
-        subcategory_name = subcategory_to_delete.name
-        if (
-            self.tracking_category_id == category_id
-            and self.tracking_subcategory_id
-            == subcategory_id_to_delete
-        ):
-            if self.is_tracking_active:
-                self.is_tracking_active = False
-                self.tracking_start_time = None
-                yield rx.toast.info(
-                    f"Tracking stopped as subcategory '{subcategory_name}' was deleted."
+        async with self:
+            if category_id not in self.categories:
+                yield rx.toast.error(
+                    "Parent category not found for subcategory deletion."
                 )
-            self.tracking_subcategory_id = ""
-            self.tracking_elapsed_time_str = "00:00:00"
-        if (
-            self.selected_category_for_entry == category_id
-            and self.selected_subcategory_for_entry
-            == subcategory_id_to_delete
-        ):
-            self.selected_subcategory_for_entry = ""
-        original_subcategories = list(
-            category.subcategories
-        )
-        category.subcategories = [
-            sub
-            for sub in original_subcategories
-            if sub.id != subcategory_id_to_delete
-        ]
-        self._recalculate_category_progress(category_id)
-        if (
-            self.current_category_detail
-            and self.current_category_detail.id
-            == category_id
-        ):
-            self.current_category_detail = (
-                self.categories.get(category_id)
+                return
+            category = self.categories[category_id]
+            subcategory_to_delete = next(
+                (
+                    sub
+                    for sub in category.subcategories
+                    if sub.id == subcategory_id_to_delete
+                ),
+                None,
             )
-        self.categories = self.categories.copy()
-        yield rx.toast.success(
-            f"Subcategory '{subcategory_name}' from '{category.name}' deleted (in-memory)."
-        )
+            if not subcategory_to_delete:
+                yield rx.toast.error(
+                    "Subcategory not found for deletion."
+                )
+                return
+            subcategory_name = subcategory_to_delete.name
+            if (
+                self.tracking_category_id == category_id
+                and self.tracking_subcategory_id
+                == subcategory_id_to_delete
+            ):
+                if self.is_tracking_active:
+                    self.is_tracking_active = False
+                    self.tracking_start_time = None
+                self.tracking_subcategory_id = ""
+                self.tracking_elapsed_time_str = "00:00:00"
+        async with rx.asession() as session:
+            await session.execute(
+                text(
+                    "DELETE FROM metrics WHERE id = :id AND category_id = :category_id"
+                ),
+                {
+                    "id": subcategory_id_to_delete,
+                    "category_id": category_id,
+                },
+            )
+            await session.commit()
+        async with self:
+            if (
+                self.selected_category_for_entry
+                == category_id
+                and self.selected_subcategory_for_entry
+                == subcategory_id_to_delete
+            ):
+                self.selected_subcategory_for_entry = ""
+            original_subcategories = list(
+                category.subcategories
+            )
+            category.subcategories = [
+                sub
+                for sub in original_subcategories
+                if sub.id != subcategory_id_to_delete
+            ]
+            self._recalculate_category_progress(category_id)
+            if (
+                self.current_category_detail
+                and self.current_category_detail.id
+                == category_id
+            ):
+                self.current_category_detail = (
+                    self.categories.get(category_id)
+                )
+            self.categories = self.categories.copy()
+            yield rx.toast.success(
+                f"Subcategory '{subcategory_name}' from '{category.name}' deleted."
+            )
